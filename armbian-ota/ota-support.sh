@@ -22,31 +22,42 @@ function ota_get_manifest_mode() {
     fi
 }
 
-function ota_get_image_variant_suffix() {
-    local suffix=""
-
-    if [[ "${CRYPTROOT_ENABLE}" == "yes" ]]; then
-        suffix="${suffix}_ENCRYPTED"
-    fi
-
-    suffix="${suffix}$(ota_get_layout_suffix)"
-    echo "${suffix}"
-}
-
-function ota_get_non_ota_extra_image_suffix() {
+function ota_get_extra_suffix_without_ota() {
     local extra_image_suffix="${EXTRA_IMAGE_SUFFIX:-}"
-    local ota_image_suffix
-    ota_image_suffix="$(ota_get_image_variant_suffix)"
+    local ota_suffix
+    ota_suffix="$(ota_get_layout_suffix)"
 
-    if [[ -n "${ota_image_suffix}" && "${extra_image_suffix}" == *"${ota_image_suffix}" ]]; then
-        extra_image_suffix="${extra_image_suffix%"${ota_image_suffix}"}"
+    if [[ -n "${ota_suffix}" && "${extra_image_suffix}" == *"${ota_suffix}" ]]; then
+        extra_image_suffix="${extra_image_suffix%"${ota_suffix}"}"
     fi
 
     echo "${extra_image_suffix}"
 }
 
-function ota_build_image_name_from_kernel() {
+function ota_normalize_kernel_version_for_image() {
     local kernel_version_for_image="$1"
+    local ota_suffix extra_without_ota extra_image_suffix
+
+    ota_suffix="$(ota_get_layout_suffix)"
+    extra_without_ota="$(ota_get_extra_suffix_without_ota)"
+    extra_image_suffix="${EXTRA_IMAGE_SUFFIX:-}"
+
+    # Some Armbian stages can estimate image names after EXTRA_IMAGE_SUFFIX is
+    # already folded into IMAGE_INSTALLED_KERNEL_VERSION. Keep OTA naming
+    # deterministic by stripping image-only suffixes before rebuilding the name.
+    for suffix in "${extra_image_suffix}" "${extra_without_ota}" "${ota_suffix}"; do
+        [[ -n "${suffix}" ]] || continue
+        while [[ "${kernel_version_for_image}" == *"${suffix}"* ]]; do
+            kernel_version_for_image="${kernel_version_for_image/"${suffix}"/}"
+        done
+    done
+
+    echo "${kernel_version_for_image}"
+}
+
+function ota_build_image_name_from_kernel() {
+    local kernel_version_for_image
+    kernel_version_for_image="$(ota_normalize_kernel_version_for_image "$1")"
     local vendor_version_prelude="${VENDOR}_${IMAGE_VERSION:-"${REVISION}"}_"
     if [[ "${include_vendor_version:-"yes"}" == "no" ]]; then
         vendor_version_prelude=""
@@ -58,10 +69,10 @@ function ota_build_image_name_from_kernel() {
         base_image_name="${base_image_name}_${DESKTOP_ENVIRONMENT}"
     fi
 
-    local non_ota_extra_suffix
-    non_ota_extra_suffix="$(ota_get_non_ota_extra_image_suffix)"
-    if [[ -n "${non_ota_extra_suffix}" ]]; then
-        base_image_name="${base_image_name}${non_ota_extra_suffix}"
+    local extra_without_ota
+    extra_without_ota="$(ota_get_extra_suffix_without_ota)"
+    if [[ -n "${extra_without_ota}" ]]; then
+        base_image_name="${base_image_name}${extra_without_ota}"
     fi
 
     if [[ "$BUILD_DESKTOP" == "yes" ]]; then
@@ -74,10 +85,10 @@ function ota_build_image_name_from_kernel() {
         base_image_name="${base_image_name}_nfsboot"
     fi
 
-    local ota_image_suffix
-    ota_image_suffix="$(ota_get_image_variant_suffix)"
-    if [[ -n "${ota_image_suffix}" ]]; then
-        base_image_name="${base_image_name}${ota_image_suffix}"
+    local ota_suffix
+    ota_suffix="$(ota_get_layout_suffix)"
+    if [[ -n "${ota_suffix}" ]]; then
+        base_image_name="${base_image_name}${ota_suffix}"
     fi
 
     echo "${base_image_name}"
@@ -183,7 +194,7 @@ function ota_copy_payload_tools() {
 
 function extension_prepare_config__ota_image_suffix() {
     local ota_image_suffix
-    ota_image_suffix="$(ota_get_image_variant_suffix)"
+    ota_image_suffix="$(ota_get_layout_suffix)"
 
     EXTRA_IMAGE_SUFFIXES+=("${ota_image_suffix}")
     display_alert "OTA image suffix" "${ota_image_suffix}" "info"
