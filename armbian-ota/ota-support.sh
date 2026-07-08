@@ -22,35 +22,56 @@ function ota_get_manifest_mode() {
     fi
 }
 
-function ota_get_extra_suffix_without_ota() {
-    local extra_image_suffix="${EXTRA_IMAGE_SUFFIX:-}"
-    local ota_suffix
-    ota_suffix="$(ota_get_layout_suffix)"
+function ota_strip_layout_suffixes() {
+    local value="$1"
+    local suffix previous
 
-    if [[ -n "${ota_suffix}" && "${extra_image_suffix}" == *"${ota_suffix}" ]]; then
-        extra_image_suffix="${extra_image_suffix%"${ota_suffix}"}"
+    for suffix in "_AB_PART" "_RECOVERY"; do
+        while true; do
+            previous="${value}"
+            value="${value//"${suffix}-"/-}"
+            if [[ "${value}" == *"${suffix}" ]]; then
+                value="${value%"${suffix}"}"
+            fi
+            [[ "${value}" != "${previous}" ]] || break
+        done
+    done
+
+    echo "${value}"
+}
+
+function ota_kernel_version_without_family() {
+    local kernel_version="$1"
+
+    if [[ -n "${LINUXFAMILY:-}" ]]; then
+        kernel_version="${kernel_version/-$LINUXFAMILY/}"
     fi
 
-    echo "${extra_image_suffix}"
+    echo "${kernel_version}"
+}
+
+function ota_get_extra_suffix_without_ota() {
+    local extra_image_suffix="${EXTRA_IMAGE_SUFFIX:-}"
+    ota_strip_layout_suffixes "${extra_image_suffix}"
 }
 
 function ota_normalize_kernel_version_for_image() {
     local kernel_version_for_image="$1"
-    local ota_suffix extra_without_ota extra_image_suffix
+    local extra_without_ota extra_image_suffix
 
-    ota_suffix="$(ota_get_layout_suffix)"
     extra_without_ota="$(ota_get_extra_suffix_without_ota)"
     extra_image_suffix="${EXTRA_IMAGE_SUFFIX:-}"
 
     # Some Armbian stages can estimate image names after EXTRA_IMAGE_SUFFIX is
     # already folded into IMAGE_INSTALLED_KERNEL_VERSION. Keep OTA naming
     # deterministic by stripping image-only suffixes before rebuilding the name.
-    for suffix in "${extra_image_suffix}" "${extra_without_ota}" "${ota_suffix}"; do
+    for suffix in "${extra_image_suffix}" "${extra_without_ota}"; do
         [[ -n "${suffix}" ]] || continue
         while [[ "${kernel_version_for_image}" == *"${suffix}"* ]]; do
             kernel_version_for_image="${kernel_version_for_image/"${suffix}"/}"
         done
     done
+    kernel_version_for_image="$(ota_strip_layout_suffixes "${kernel_version_for_image}")"
 
     echo "${kernel_version_for_image}"
 }
@@ -96,7 +117,7 @@ function ota_build_image_name_from_kernel() {
 
 function calculate_image_version() {
     declare kernel_version_for_image="unknown"
-    kernel_version_for_image="${IMAGE_INSTALLED_KERNEL_VERSION/-$LINUXFAMILY/}"
+    kernel_version_for_image="$(ota_kernel_version_without_family "${IMAGE_INSTALLED_KERNEL_VERSION}")"
 
     calculated_image_version="$(ota_build_image_name_from_kernel "${kernel_version_for_image}")"
     display_alert "Calculated image version" "${calculated_image_version}" "debug"
@@ -107,7 +128,7 @@ function ota_build_package_base_image_name() {
     if [[ -n "$KERNEL_VERSION" ]]; then
         kernel_version_for_image="$KERNEL_VERSION"
     elif [[ -n "$IMAGE_INSTALLED_KERNEL_VERSION" ]]; then
-        kernel_version_for_image="${IMAGE_INSTALLED_KERNEL_VERSION/-$LINUXFAMILY/}"
+        kernel_version_for_image="$(ota_kernel_version_without_family "${IMAGE_INSTALLED_KERNEL_VERSION}")"
     fi
 
     ota_build_image_name_from_kernel "${kernel_version_for_image}"
@@ -196,8 +217,7 @@ function extension_prepare_config__ota_image_suffix() {
     local ota_image_suffix
     ota_image_suffix="$(ota_get_layout_suffix)"
 
-    EXTRA_IMAGE_SUFFIXES+=("${ota_image_suffix}")
-    display_alert "OTA image suffix" "${ota_image_suffix}" "info"
+    display_alert "OTA image suffix" "${ota_image_suffix} (applied during image naming)" "info"
 }
 
 function pre_umount_final_image__901_create_ota_payload_pkg() {
