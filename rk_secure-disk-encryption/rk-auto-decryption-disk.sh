@@ -58,8 +58,7 @@ function rk_autodecrypt_copy_secure_boot_defconfig() {
 
     for candidate in \
         "${script_dir}/secure-boot-config/rk3588-config/${vendor_board}_defconfig" \
-        "${script_dir}/secure-boot-config/rk3576-config/${vendor_board}_defconfig" \
-        "${script_dir}/secure-boot-config/defconfig/${vendor_board}_defconfig"; do
+        "${script_dir}/secure-boot-config/rk3576-config/${vendor_board}_defconfig"; do
         if [[ -f "${candidate}" ]]; then
             src_defconfig="${candidate}"
             break
@@ -113,20 +112,8 @@ function rk_autodecrypt_prepare_defconfig_for_current_tree() {
     vendor_board="$(rk_autodecrypt_detect_vendor_board)"
     target_defconfig="configs/${vendor_board}_defconfig"
 
-    # Rule:
-    # 1) if a dedicated trim hook exists, use it.
-    # 2) otherwise fallback to secure-boot-config defconfig.
-    if [[ "$(type -t rk_autodecrypt_uboot_defconfig_trim_hook || true)" == "function" ]]; then
-        rk_autodecrypt_uboot_defconfig_trim_hook "${target_defconfig}" ||
-            exit_with_error "auto-decrypt defconfig trim hook failed" "${target_defconfig}"
-        display_alert "optee-autodecrypt" "Applied custom defconfig trim hook: rk_autodecrypt_uboot_defconfig_trim_hook" "info"
-        rk_autodecrypt_disable_fit_signature_in_defconfig "${target_defconfig}" ||
-            exit_with_error "failed to disable CONFIG_FIT_SIGNATURE" "${target_defconfig}"
-        return 0
-    fi
-
     rk_autodecrypt_copy_secure_boot_defconfig "${vendor_board}" ||
-        exit_with_error "auto-decrypt defconfig fallback failed" "vendor_board=${vendor_board} secure-boot-config"
+        exit_with_error "auto-decrypt defconfig copy failed" "vendor_board=${vendor_board} secure-boot-config"
     rk_autodecrypt_disable_fit_signature_in_defconfig "${target_defconfig}" ||
         exit_with_error "failed to disable CONFIG_FIT_SIGNATURE" "${target_defconfig}"
 }
