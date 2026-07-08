@@ -1,9 +1,15 @@
 #
+# Shared Helpers
+#
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rk-common.sh"
+
+#
 # Source Fetchers
 #
 
 function fetch_sources_tools__rksdk_tools() {
-	fetch_from_repo "${RKBIN_GIT_URL:-"https://github.com/ackPeng/rockchip_sdk_tools.git"}" "rockchip_sdk_tools" "branch:${RKSDK_TOOLS_BRANCH:-"main"}"
+    rk_fetch_sdk_tools
 }
 
 #
@@ -32,47 +38,27 @@ function rk_autodecrypt_fit_boot_required() {
 #
 
 function resolve_rockchip_sdk_rkbin_root() {
-    echo "${SRC}/cache/sources/rockchip_sdk_tools/rkbin"
+    rk_sdk_rkbin_root
 }
 
 function rk_secure_boot_platform_from_name() {
-    local name
-    name="$(echo "$*" | tr '[:upper:]' '[:lower:]' | tr '_' '-' | tr ' ' '-')"
-
-    case "${name}" in
-        *rk3576*|*3576*) echo "rk3576" ;;
-        *rk3588*|*3588*) echo "rk3588" ;;
-        *) echo "unknown" ;;
-    esac
+    rk_platform_from_name "$@"
 }
 
 function rk_secure_boot_default_board() {
-    local platform="$1"
-
-    case "${platform}" in
-        rk3576|rk3588) echo "recomputer-${platform}-devkit" ;;
-        *) echo "unknown" ;;
-    esac
+    rk_default_vendor_board "$1"
 }
 
 function detect_rk_secure_boot_platform() {
     # Return value: rk3576 / rk3588 / unknown
     # Platform detection prefers BOOT_SOC, then falls back to board names.
-    local platform
-
-    platform="$(rk_secure_boot_platform_from_name "${BOOT_SOC:-}")"
-    if [[ "${platform}" != "unknown" ]]; then
-        echo "${platform}"
-        return 0
-    fi
-
-    rk_secure_boot_platform_from_name "${BOARD_NAME:-${BOARD:-}}"
+    rk_detect_platform
 }
 
 function detect_rk_secure_boot_board() {
     # Return value: canonical vendor board name, e.g. recomputer-rk3576-devkit / recomputer-rk3588-devkit / unknown
     # Board detection is based on BOARD_NAME first, fallback to BOARD.
-    rk_secure_boot_default_board "$(detect_rk_secure_boot_platform)"
+    rk_detect_vendor_board
 }
 
 function resolve_platform_rkbin_dir() {
@@ -115,21 +101,7 @@ function resolve_platform_rkbin_dir() {
 
 function resolve_rk_secure_extension_dir() {
     # Resolve extension root robustly across different Armbian extension layouts.
-    local script_dir candidate
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-    for candidate in \
-        "${script_dir}" \
-        "${SRC}/extensions/seeed_armbian_extension/rk_secure-disk-encryption" \
-        "${SRC}/extensions/rk_secure-disk-encryption"; do
-        if [[ -d "${candidate}/secure-boot-config" ]]; then
-            echo "${candidate}"
-            return 0
-        fi
-    done
-
-    # Fallback to script directory for clearer error messages upstream.
-    echo "${script_dir}"
+    rk_resolve_extension_dir "secure-boot-config"
 }
 
 function resolve_platform_defconfig_path() {

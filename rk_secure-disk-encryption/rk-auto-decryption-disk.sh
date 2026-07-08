@@ -1,4 +1,10 @@
 #
+# Shared Helpers
+#
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rk-common.sh"
+
+#
 # Source-Time Setup
 #
 
@@ -22,40 +28,20 @@ rk_auto_decryption_enable_optee_bootchain
 #
 
 function rk_autodecrypt_nonsecure_mode_enabled() {
-    [[ "${CRYPTROOT_ENABLE}" == "yes" && "${RK_AUTO_DECRYP}" == "yes" && "${RK_SECURE_UBOOT_ENABLE}" != "yes" ]]
+    rk_autodecrypt_enabled && ! rk_full_secure_boot_enabled
 }
 
 function rk_autodecrypt_resolve_extension_dir() {
-    local script_dir candidate
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-    for candidate in \
-        "${script_dir}" \
-        "${SRC}/extensions/seeed_armbian_extension/rk_secure-disk-encryption" \
-        "${SRC}/extensions/rk_secure-disk-encryption"; do
-        if [[ -d "${candidate}/auto-decryption-config" ]]; then
-            echo "${candidate}"
-            return 0
-        fi
-    done
-
-    echo "${script_dir}"
+    rk_resolve_extension_dir "auto-decryption-config"
 }
 
 function rk_autodecrypt_run_host_command() {
-    if [[ "$(type -t run_host_command_logged || true)" == "function" ]]; then
-        run_host_command_logged "$@"
-    else
-        "$@"
-    fi
+    rk_run_host_command "$@"
 }
 
 function rk_autodecrypt_ensure_sdk_tools() {
-    RK_AUTODECRYPT_SDK_TOOLS="${SRC}/cache/sources/rockchip_sdk_tools"
-    if [[ ! -d "${RK_AUTODECRYPT_SDK_TOOLS}" ]]; then
-        display_alert "optee" "rockchip_sdk_tools source directory not found, downloading" "info"
-        fetch_from_repo "${RKBIN_GIT_URL:-"https://github.com/ackPeng/rockchip_sdk_tools.git"}" "rockchip_sdk_tools" "branch:${RKSDK_TOOLS_BRANCH:-"main"}"
-    fi
+    RK_AUTODECRYPT_SDK_TOOLS="$(rk_sdk_tools_root)"
+    rk_ensure_sdk_tools "optee"
 }
 
 function rk_autodecrypt_ensure_pycryptodome() {
@@ -80,20 +66,14 @@ function rk_autodecrypt_detect_vendor_board() {
         return 0
     fi
 
-    if [[ "$(type -t detect_rk_secure_boot_board || true)" == "function" ]]; then
-        local detected_board
-        detected_board="$(detect_rk_secure_boot_board)"
-        if [[ -n "${detected_board}" && "${detected_board}" != "unknown" ]]; then
-            echo "${detected_board}"
-            return 0
-        fi
+    local detected_board
+    detected_board="$(rk_detect_vendor_board)"
+    if [[ -n "${detected_board}" && "${detected_board}" != "unknown" ]]; then
+        echo "${detected_board}"
+        return 0
     fi
 
-    case "$(echo "${BOOT_SOC:-}" | tr '[:upper:]' '[:lower:]')" in
-        *3576*) echo "recomputer-rk3576-devkit" ;;
-        *3588*) echo "recomputer-rk3588-devkit" ;;
-        *) echo "unknown" ;;
-    esac
+    echo "unknown"
 }
 
 function rk_autodecrypt_copy_secure_boot_defconfig() {
@@ -320,7 +300,6 @@ function rk_secure_storage_write_passphrase() {
         display_alert "secure-storage" "Password write verification failed" "warn"
     fi
 
-    sync
     sync
     blockdev --flushbufs "${sec_dev}" 2>/dev/null || true
 }
