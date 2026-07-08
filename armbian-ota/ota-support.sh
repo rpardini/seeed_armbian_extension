@@ -724,6 +724,210 @@ function pre_umount_final_image__899_install_fw_env_tool() {
 }
 
 #
+# OTA Package Creation Helpers
+#
+
+function ota_secure_boot_autodecrypt_enabled() {
+    [[ "${RK_SECURE_UBOOT_ENABLE}" == "yes" && "${RK_AUTO_DECRYP}" == "yes" ]]
+}
+
+function ota_encrypted_autodecrypt_nonsecure_enabled() {
+    [[ "${CRYPTROOT_ENABLE}" == "yes" && "${RK_AUTO_DECRYP}" == "yes" && "${RK_SECURE_UBOOT_ENABLE}" != "yes" ]]
+}
+
+function ota_require_host_tools() {
+    local tool
+
+    for tool in "$@"; do
+        if ! command -v "${tool}" >/dev/null 2>&1; then
+            display_alert "Error: Missing required tool" "${tool}" "err"
+            return 1
+        fi
+    done
+}
+
+function ota_write_sha256_file() {
+    local ota_temp_dir="$1"
+    local image_name="$2"
+    local sha_file="$3"
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        (cd "${ota_temp_dir}" && sha256sum "${image_name}" > "${sha_file}") || {
+            display_alert "Warning: Failed to generate SHA256 for ${image_name}" "${sha_file}" "warn"
+        }
+    else
+        display_alert "Warning: sha256sum not available; skipping ${image_name} SHA256" "" "warn"
+    fi
+}
+
+function ota_verify_sha256_file() {
+    local ota_temp_dir="$1"
+    local sha_file="$2"
+    local image_name="$3"
+
+    [[ -f "${sha_file}" ]] || return 0
+
+    if ! (cd "${ota_temp_dir}" && sha256sum -c "$(basename "${sha_file}")" >/dev/null 2>&1); then
+        display_alert "Error: ${image_name} SHA256 verification failed" "${sha_file}" "err"
+        return 1
+    fi
+}
+
+function ota_verify_extracted_archives() {
+    local ota_temp_dir="$1"
+    local secure_boot_and_decrypt="$2"
+    local boot_tar="$3"
+    local rootfs_tar="$4"
+    local boot_sha_file="$5"
+    local rootfs_sha_file="$6"
+
+    if [[ ! -f "${rootfs_tar}" ]]; then
+        display_alert "Error: rootfs.tar.gz not found" "" "err"
+        return 1
+    fi
+
+    if ! tar -tzf "${rootfs_tar}" >/dev/null 2>&1; then
+        display_alert "Error: rootfs.tar.gz is corrupted or invalid" "" "err"
+        return 1
+    fi
+
+    ota_verify_sha256_file "${ota_temp_dir}" "${rootfs_sha_file}" "rootfs.tar.gz" || return 1
+
+    if [[ "${secure_boot_and_decrypt}" == "yes" && -f "${ota_temp_dir}/boot.itb" ]]; then
+        if [[ ! -r "${ota_temp_dir}/boot.itb" ]]; then
+            display_alert "Error: boot.itb is not readable" "" "err"
+            return 1
+        fi
+
+        ota_verify_sha256_file "${ota_temp_dir}" "${boot_sha_file}" "boot.itb" || return 1
+        display_alert "Archive verification completed" "boot.itb and rootfs.tar.gz are valid" "info"
+    elif [[ -f "${boot_tar}" ]]; then
+        if ! tar -tzf "${boot_tar}" >/dev/null 2>&1; then
+            display_alert "Error: boot.tar.gz is corrupted or invalid" "" "err"
+            return 1
+        fi
+
+        ota_verify_sha256_file "${ota_temp_dir}" "${boot_sha_file}" "boot.tar.gz" || return 1
+        display_alert "Archive verification completed" "boot.tar.gz and rootfs.tar.gz are valid" "info"
+    else
+        display_alert "Archive verification completed" "rootfs.tar.gz is valid (no boot partition found)" "info"
+    fi
+}
+
+function ota_extraction_summary() {
+    local ota_temp_dir="$1"
+    local secure_boot_and_decrypt="$2"
+    local boot_tar="$3"
+
+    if [[ "${secure_boot_and_decrypt}" == "yes" && -f "${ota_temp_dir}/boot.itb" ]]; then
+        echo "boot.itb + rootfs.tar.gz (secure boot)"
+    elif [[ -f "${boot_tar}" ]]; then
+        echo "boot.tar.gz + rootfs.tar.gz"
+    else
+        echo "rootfs.tar.gz only"
+    fi
+}
+
+function ota_write_package_env() {
+    local ota_temp_dir="$1"
+    local manifest_mode="$2"
+    local ota_mode_file="${ota_temp_dir}/package.env"
+
+    cat > "${ota_mode_file}" << EOF
+OTA_MODE=${manifest_mode}
+OTA_ENCRYPTED=${CRYPTROOT_ENABLE:-no}
+BOARD=${BOARD}
+RELEASE=${RELEASE}
+BRANCH=${BRANCH}
+VERSION=${IMAGE_VERSION:-"${REVISION}"}
+KERNEL=${KERNEL_VERSION:-"${IMAGE_INSTALLED_KERNEL_VERSION}"}
+EOF
+}
+
+function ota_write_ab_version_file() {
+    local ota_temp_dir="$1"
+    local version_file="${ota_temp_dir}/version.txt"
+
+    [[ "${AB_PART_OTA}" == "yes" ]] || return 0
+
+    cat > "${version_file}" << EOF
+# Armbian AB OTA Package Version Info
+# Generated: $(date)
+
+VERSION=${IMAGE_VERSION:-"${REVISION}"}
+VENDOR=${VENDOR}
+BOARD=${BOARD}
+RELEASE=${RELEASE}
+BRANCH=${BRANCH}
+KERNEL=${KERNEL_VERSION:-"${IMAGE_INSTALLED_KERNEL_VERSION}"}
+EOF
+    display_alert "AB partition OTA" "Created version.txt for OTA package" "info"
+}
+
+function ota_write_manifest() {
+    local ota_temp_dir="$1"
+    local base_image_name="$2"
+    local secure_boot_and_decrypt="$3"
+    local boot_tar="$4"
+    local rootfs_tar="$5"
+    local manifest_file="${ota_temp_dir}/manifest.txt"
+
+    cat > "${manifest_file}" << EOF
+# Armbian OTA Package Manifest
+# Generated on: $(date)
+# Original image: ${base_image_name}
+
+Package Contents:
+EOF
+
+    if [[ "${secure_boot_and_decrypt}" == "yes" && -f "${ota_temp_dir}/boot.itb" ]]; then
+        echo "- boot.itb: FIT boot image for secure boot" >> "${manifest_file}"
+    elif [[ -f "${boot_tar}" ]]; then
+        echo "- boot.tar.gz: Boot partition image" >> "${manifest_file}"
+    fi
+    if [[ -f "${rootfs_tar}" ]]; then
+        echo "- rootfs.tar.gz: Root filesystem image" >> "${manifest_file}"
+    fi
+    if [[ "${AB_PART_OTA}" == "yes" && -f "${ota_temp_dir}/version.txt" ]]; then
+        echo "- version.txt: Version information" >> "${manifest_file}"
+    fi
+    echo "- package.env: OTA runtime metadata" >> "${manifest_file}"
+    echo "- ota_tools/: OTA runtime scripts and helpers" >> "${manifest_file}"
+}
+
+function ota_create_final_tarball() {
+    local ota_temp_dir="$1"
+    local ota_output_path="$2"
+
+    (
+        cd "${ota_temp_dir}" &&
+        {
+            printf '%s\0' "package.env"
+            find . -mindepth 1 ! -path "./package.env" ! -type d -printf '%P\0' | LC_ALL=C sort -z
+        } | tar --null -czf "${ota_output_path}" -T -
+    )
+}
+
+function ota_write_package_checksums() {
+    local ota_output_path="$1"
+    local checksum_file="$2"
+    local ota_package_name="$3"
+    local ota_md5 ota_sha256
+
+    ota_md5="$(md5sum "${ota_output_path}" | awk '{print $1}')"
+    ota_sha256="$(sha256sum "${ota_output_path}" | awk '{print $1}')"
+
+    cat > "${checksum_file}" << EOF
+# Armbian OTA Package Checksums
+# Package: ${ota_package_name}
+# Generated: $(date)
+
+MD5:    ${ota_md5}
+SHA256: ${ota_sha256}
+EOF
+}
+
+#
 # OTA Package Creation Hook
 #
 
@@ -734,10 +938,10 @@ function pre_umount_final_image__901_create_ota_payload_pkg() {
     # Check for secure boot and auto ota configuration
     local secure_boot_and_decrypt="no"
     local encrypted_autodecrypt_nonsecure="no"
-    if [[ "${RK_SECURE_UBOOT_ENABLE}" == "yes" && "${RK_AUTO_DECRYP}" == "yes" ]]; then
+    if ota_secure_boot_autodecrypt_enabled; then
         secure_boot_and_decrypt="yes"
         display_alert "Secure boot and auto ota enabled" "Using FIT image workflow" "info"
-    elif [[ "${CRYPTROOT_ENABLE}" == "yes" && "${RK_AUTO_DECRYP}" == "yes" && "${RK_SECURE_UBOOT_ENABLE}" != "yes" ]]; then
+    elif ota_encrypted_autodecrypt_nonsecure_enabled; then
         encrypted_autodecrypt_nonsecure="yes"
         display_alert "Encrypted auto-decrypt OTA" "Non-secure boot mode: use mapper rootfs and package plain boot partition" "info"
     fi
@@ -752,14 +956,7 @@ function pre_umount_final_image__901_create_ota_payload_pkg() {
         return 1
     fi
 
-    # Check required tools
-    local required_tools="tar mount"
-    for tool in $required_tools; do
-        if ! command -v "$tool" >/dev/null 2>&1; then
-            display_alert "Error: Missing required tool" "$tool" "err"
-            return 1
-        fi
-    done
+    ota_require_host_tools tar mount || return 1
 
     # For secure boot and auto ota, we don't need to detect partitions
     local boot_partition=""
@@ -772,10 +969,6 @@ function pre_umount_final_image__901_create_ota_payload_pkg() {
     elif [[ "${AB_PART_OTA}" == "yes" ]]; then
         # AB partition OTA mode: Detect boot_a and rootfs_a partitions
         display_alert "AB partition OTA mode" "Detecting A-slot partitions" "info"
-
-        # Get all partition information
-        local partition_info
-        partition_info=$(lsblk -ln -o NAME,SIZE,MOUNTPOINT "${LOOP}" | grep -E "${LOOP##*/}p?[0-9]+" | sort)
 
         display_alert "AB partition OTA" "Looking for armbi_boota and armbi_roota partitions" "info"
 
@@ -918,23 +1111,15 @@ function pre_umount_final_image__901_create_ota_payload_pkg() {
     # Handle boot partition content
     if [[ "$secure_boot_and_decrypt" == "yes" ]]; then
         local uboot_src="${SRC}/cache/sources/${BOOTSOURCEDIR}"
-        local uboot_dir="${uboot_src}"
         # For secure boot with auto ota, look for boot.itb in the chroot
-        local boot_itb_source="${uboot_dir}/fit/boot.itb"
+        local boot_itb_source="${uboot_src}/fit/boot.itb"
         if [[ -f "$boot_itb_source" ]]; then
             display_alert "Copying FIT boot image" "${boot_itb_source} -> boot.itb" "info"
             if cp "$boot_itb_source" "${ota_temp_dir}/boot.itb"; then
                 local boot_itb_size=$(stat -c%s "${ota_temp_dir}/boot.itb")
                 display_alert "FIT boot image copied" "boot.itb size: $((boot_itb_size / 1024)) KB" "info"
 
-                # Generate SHA256 for boot.itb
-                if command -v sha256sum >/dev/null 2>&1; then
-                    (cd "${ota_temp_dir}" && sha256sum "boot.itb" > "${boot_sha_file}") || {
-                        display_alert "Warning: Failed to generate SHA256 for boot.itb" "${boot_sha_file}" "warn"
-                    }
-                else
-                    display_alert "Warning: sha256sum not available; skipping boot.itb SHA256" "" "warn"
-                fi
+                ota_write_sha256_file "${ota_temp_dir}" "boot.itb" "${boot_sha_file}"
             else
                 display_alert "Warning: Failed to copy boot.itb" "" "warn"
             fi
@@ -950,14 +1135,7 @@ function pre_umount_final_image__901_create_ota_payload_pkg() {
                 local boot_tar_size=$(stat -c%s "$boot_tar")
                 display_alert "Boot content archived" "boot.tar.gz size: $((boot_tar_size / 1024)) KB" "info"
                 display_alert "Boot partition contents" "Found $(find "$boot_mount" -type f | wc -l) files" "debug"
-                # Generate SHA256 for boot.tar.gz
-                if command -v sha256sum >/dev/null 2>&1; then
-                    (cd "${ota_temp_dir}" && sha256sum "boot.tar.gz" > "${boot_sha_file}") || {
-                        display_alert "Warning: Failed to generate SHA256 for boot.tar.gz" "${boot_sha_file}" "warn"
-                    }
-                else
-                    display_alert "Warning: sha256sum not available; skipping boot.tar.gz SHA256" "" "warn"
-                fi
+                ota_write_sha256_file "${ota_temp_dir}" "boot.tar.gz" "${boot_sha_file}"
             else
                 umount "$boot_mount" 2>/dev/null || true
                 display_alert "Warning: Failed to create boot.tar.gz" "" "warn"
@@ -994,14 +1172,7 @@ function pre_umount_final_image__901_create_ota_payload_pkg() {
             local rootfs_tar_size=$(stat -c%s "$rootfs_tar")
             display_alert "Rootfs content archived" "rootfs.tar.gz size: $((rootfs_tar_size / 1024 / 1024)) MB" "info"
             display_alert "Rootfs partition contents" "Found $(find "$rootfs_mount" -type f | wc -l) files" "debug"
-            # Generate SHA256 for rootfs.tar.gz
-            if command -v sha256sum >/dev/null 2>&1; then
-                (cd "${ota_temp_dir}" && sha256sum "rootfs.tar.gz" > "${rootfs_sha_file}") || {
-                    display_alert "Warning: Failed to generate SHA256 for rootfs.tar.gz" "${rootfs_sha_file}" "warn"
-                }
-            else
-                display_alert "Warning: sha256sum not available; skipping rootfs.tar.gz SHA256" "" "warn"
-            fi
+            ota_write_sha256_file "${ota_temp_dir}" "rootfs.tar.gz" "${rootfs_sha_file}"
         else
             umount "$rootfs_mount" 2>/dev/null || true
             display_alert "Error: Failed to create rootfs.tar.gz" "" "err"
@@ -1018,70 +1189,11 @@ function pre_umount_final_image__901_create_ota_payload_pkg() {
     # Clean up temporary mount points
     rm -rf "$boot_mount" "$rootfs_mount"
 
-    # Verify extraction results
-
-    # Check rootfs.tar.gz (must exist)
-    if [[ ! -f "$rootfs_tar" ]]; then
-        display_alert "Error: rootfs.tar.gz not found" "" "err"
-        return 1
-    fi
-
-    # Verify rootfs.tar.gz integrity
-    if ! tar -tzf "$rootfs_tar" >/dev/null 2>&1; then
-        display_alert "Error: rootfs.tar.gz is corrupted or invalid" "" "err"
-        return 1
-    fi
-
-    # Verify SHA256 sums if generated
-    if [[ -f "${rootfs_sha_file}" ]]; then
-        if ! (cd "${ota_temp_dir}" && sha256sum -c "$(basename "${rootfs_sha_file}")" >/dev/null 2>&1); then
-            display_alert "Error: rootfs.tar.gz SHA256 verification failed" "${rootfs_sha_file}" "err"
-            return 1
-        fi
-    fi
-
-    if [[ "$secure_boot_and_decrypt" == "yes" && -f "${ota_temp_dir}/boot.itb" ]]; then
-        # Verify boot.itb exists and is readable
-        if [[ ! -r "${ota_temp_dir}/boot.itb" ]]; then
-            display_alert "Error: boot.itb is not readable" "" "err"
-            return 1
-        fi
-
-        if [[ -f "${boot_sha_file}" ]]; then
-            if ! (cd "${ota_temp_dir}" && sha256sum -c "$(basename "${boot_sha_file}")" >/dev/null 2>&1); then
-                display_alert "Error: boot.itb SHA256 verification failed" "${boot_sha_file}" "err"
-                return 1
-            fi
-        fi
-
-        display_alert "Archive verification completed" "boot.itb and rootfs.tar.gz are valid" "info"
-    elif [[ -f "$boot_tar" ]]; then
-        if ! tar -tzf "$boot_tar" >/dev/null 2>&1; then
-            display_alert "Error: boot.tar.gz is corrupted or invalid" "" "err"
-            return 1
-        fi
-
-        if [[ -f "${boot_sha_file}" ]]; then
-            if ! (cd "${ota_temp_dir}" && sha256sum -c "$(basename "${boot_sha_file}")" >/dev/null 2>&1); then
-                display_alert "Error: boot.tar.gz SHA256 verification failed" "${boot_sha_file}" "err"
-                return 1
-            fi
-        fi
-
-        display_alert "Archive verification completed" "boot.tar.gz and rootfs.tar.gz are valid" "info"
-    else
-        display_alert "Archive verification completed" "rootfs.tar.gz is valid (no boot partition found)" "info"
-    fi
+    ota_verify_extracted_archives "${ota_temp_dir}" "${secure_boot_and_decrypt}" "${boot_tar}" "${rootfs_tar}" "${boot_sha_file}" "${rootfs_sha_file}" || return 1
 
     # Display extraction summary
-    local summary=""
-    if [[ "$secure_boot_and_decrypt" == "yes" && -f "${ota_temp_dir}/boot.itb" ]]; then
-        summary="boot.itb + rootfs.tar.gz (secure boot)"
-    elif [[ -f "$boot_tar" ]]; then
-        summary="boot.tar.gz + rootfs.tar.gz"
-    else
-        summary="rootfs.tar.gz only"
-    fi
+    local summary
+    summary="$(ota_extraction_summary "${ota_temp_dir}" "${secure_boot_and_decrypt}" "${boot_tar}")"
     display_alert "Extraction summary" "Created $summary" "info"
 
     # Create final OTA package
@@ -1104,73 +1216,19 @@ function pre_umount_final_image__901_create_ota_payload_pkg() {
     local manifest_mode
     manifest_mode="$(ota_get_manifest_mode)"
 
-    local ota_mode_file="$ota_temp_dir/package.env"
-    cat > "$ota_mode_file" << EOF
-OTA_MODE=${manifest_mode}
-OTA_ENCRYPTED=${CRYPTROOT_ENABLE:-no}
-BOARD=${BOARD}
-RELEASE=${RELEASE}
-BRANCH=${BRANCH}
-VERSION=${IMAGE_VERSION:-"${REVISION}"}
-KERNEL=${KERNEL_VERSION:-"${IMAGE_INSTALLED_KERNEL_VERSION}"}
-EOF
+    ota_write_package_env "${ota_temp_dir}" "${manifest_mode}"
 
     if ! ota_copy_payload_tools "${ota_temp_dir}"; then
         rm -rf "$ota_temp_dir"
         return 1
     fi
 
-    # Create version info file for compatibility wrapper
-    if [[ "${AB_PART_OTA}" == "yes" ]]; then
-        local version_file="$ota_temp_dir/version.txt"
-        cat > "$version_file" << EOF
-# Armbian AB OTA Package Version Info
-# Generated: $(date)
-
-VERSION=${IMAGE_VERSION:-"${REVISION}"}
-VENDOR=${VENDOR}
-BOARD=${BOARD}
-RELEASE=${RELEASE}
-BRANCH=${BRANCH}
-KERNEL=${KERNEL_VERSION:-"${IMAGE_INSTALLED_KERNEL_VERSION}"}
-EOF
-        display_alert "AB partition OTA" "Created version.txt for OTA package" "info"
-    fi
-
-    # Create OTA package manifest file
-    local manifest_file="$ota_temp_dir/manifest.txt"
-    cat > "$manifest_file" << EOF
-# Armbian OTA Package Manifest
-# Generated on: $(date)
-# Original image: ${base_image_name}
-
-Package Contents:
-EOF
-
-    # Add file list to manifest
-    if [[ "$secure_boot_and_decrypt" == "yes" && -f "${ota_temp_dir}/boot.itb" ]]; then
-        echo "- boot.itb: FIT boot image for secure boot" >> "$manifest_file"
-    elif [[ -f "$boot_tar" ]]; then
-        echo "- boot.tar.gz: Boot partition image" >> "$manifest_file"
-    fi
-    if [[ -f "$rootfs_tar" ]]; then
-        echo "- rootfs.tar.gz: Root filesystem image" >> "$manifest_file"
-    fi
-    if [[ "${AB_PART_OTA}" == "yes" && -f "$ota_temp_dir/version.txt" ]]; then
-        echo "- version.txt: Version information" >> "$manifest_file"
-    fi
-    echo "- package.env: OTA runtime metadata" >> "$manifest_file"
-    echo "- ota_tools/: OTA runtime scripts and helpers" >> "$manifest_file"
+    ota_write_ab_version_file "${ota_temp_dir}"
+    ota_write_manifest "${ota_temp_dir}" "${base_image_name}" "${secure_boot_and_decrypt}" "${boot_tar}" "${rootfs_tar}"
 
     # Create final OTA tar.gz package
     display_alert "Creating final OTA package" "${ota_package_name}" "info"
-    if (
-        cd "$ota_temp_dir" &&
-        {
-            printf '%s\0' "package.env"
-            find . -mindepth 1 ! -path "./package.env" ! -type d -printf '%P\0' | LC_ALL=C sort -z
-        } | tar --null -czf "$ota_output_path" -T -
-    ); then
+    if ota_create_final_tarball "${ota_temp_dir}" "${ota_output_path}"; then
         local ota_size=$(stat -c%s "$ota_output_path")
         display_alert "OTA package created successfully" "${ota_package_name} ($((ota_size / 1024 / 1024)) MB)" "info"
 
@@ -1180,20 +1238,9 @@ EOF
             display_alert "  - $file" "" "info"
         done
 
-        # Create checksums
-        local ota_md5=$(md5sum "$ota_output_path" | awk '{print $1}')
-        local ota_sha256=$(sha256sum "$ota_output_path" | awk '{print $1}')
-
         # Write checksums file
         local checksum_file="${DEST}/images/$(ota_image_checksum_name "${base_image_name}")"
-        cat > "$checksum_file" << EOF
-# Armbian OTA Package Checksums
-# Package: ${ota_package_name}
-# Generated: $(date)
-
-MD5:    ${ota_md5}
-SHA256: ${ota_sha256}
-EOF
+        ota_write_package_checksums "${ota_output_path}" "${checksum_file}" "${ota_package_name}"
         display_alert "Checksums generated" "${checksum_file}" "info"
 
     else
