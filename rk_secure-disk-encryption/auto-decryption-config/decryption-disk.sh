@@ -7,7 +7,6 @@ export SECURITY_STORAGE=SECURITY
 BN_DIR="/dev/block/by-name"
 SYSPW_FILE="/tmp/syspw"
 MAPPER_NAME="armbian-root"
-MAPPER_DEV="/dev/mapper/${MAPPER_NAME}"
 TEE_SUPPLICANT_PID=""
 
 log_step() {
@@ -21,18 +20,6 @@ first_line() {
         return 0
     done
     return 1
-}
-
-set_initramfs_root() {
-    mkdir -p /conf 2>/dev/null || true
-    {
-        echo "ROOT='$1'"
-        echo "readonly='n'"
-    } >> /conf/param.conf
-
-    ROOT="$1"
-    readonly=n
-    export ROOT readonly
 }
 
 get_cmdline_crypt_uuid() {
@@ -155,6 +142,5 @@ log_step "[Decryption-disk] Unlocking LUKS encrypted partition"
     exit 1
 }
 
-set_initramfs_root "$MAPPER_DEV"
-log_step "[Decryption-disk] root device set to ${ROOT}"
+log_step "[Decryption-disk] root mapper ready: /dev/mapper/${MAPPER_NAME}"
 log_step "[Decryption-disk] LUKS partition unlocked successfully"
