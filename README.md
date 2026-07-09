@@ -181,7 +181,7 @@ seeed_armbian_extension/
 ├── armbian-ota/
 │   ├── ota-support.sh                        # OTA build hook entry point
 │   ├── build-hooks/                          # OTA build-time hook implementation
-│   ├── runtime/                              # Unified armbian-ota CLI and backends
+│   ├── runtime/                              # Unified armbian-ota CLI and shared libs
 │   ├── recovery/                             # Recovery OTA backend
 │   └── ab/                                   # A/B OTA userspace/systemd
 └── rk_secure-disk-encryption/

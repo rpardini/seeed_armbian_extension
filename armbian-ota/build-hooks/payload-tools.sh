@@ -33,8 +33,8 @@ Typical usage:
    else
        cp -a runtime/policy/preserve-list.txt /etc/armbian-ota/preserve-list.txt
    fi
-   cp -a ab/runtime/backend.sh /usr/share/armbian-ota/backend-ab.sh
-   cp -a recovery/runtime/backend.sh /usr/share/armbian-ota/backend-recovery.sh
+   cp -a ab/backend.sh /usr/share/armbian-ota/backend-ab.sh
+   cp -a recovery/backend.sh /usr/share/armbian-ota/backend-recovery.sh
    mkdir -p /usr/share/armbian-ota/recovery
    cp -a recovery/. /usr/share/armbian-ota/recovery/
 
@@ -80,4 +80,3 @@ function ota_copy_payload_tools() {
 
     ota_write_payload_tools_readme "${payload_tools_dir}"
 }
-

@@ -24,8 +24,7 @@ extensions/armbian-ota/
 │   └── package-create.sh                   # OTA package creation hook
 │
 ├── recovery/                           # Recovery OTA mode
-│   ├── runtime/
-│   │   └── backend.sh                      # Recovery OTA backend
+│   ├── backend.sh                          # Recovery OTA backend
 │   ├── initramfs_hooks/
 │   │   ├── 99-copy-tools                   # Initramfs hook for recovery OTA
 │   │   └── 99-ota-apply                    # Recovery OTA apply script
@@ -41,8 +40,7 @@ extensions/armbian-ota/
 │       └── preserve-list.txt                   # Default local config preserve list
 │
 ├── ab/                                 # AB Partition OTA mode
-│   ├── runtime/
-│   │   └── backend.sh                      # AB OTA backend
+│   ├── backend.sh                          # AB OTA backend
 │   ├── lib/
 │   │   ├── armbian-ota-health-check        # First boot health check
 │   │   ├── armbian-ota-init-uboot          # U-Boot environment initializer

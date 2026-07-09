@@ -66,12 +66,12 @@ function pre_umount_final_image__894_install_ota_runtime() {
     fi
 
     if [[ "${AB_PART_OTA}" == "yes" ]]; then
-        cp "${ab_src}/runtime/backend.sh" "${root_dir}/usr/share/armbian-ota/backend-ab.sh" || {
+        cp "${ab_src}/backend.sh" "${root_dir}/usr/share/armbian-ota/backend-ab.sh" || {
             display_alert "OTA runtime" "Failed to install backend-ab.sh" "err"
             return 1
         }
     else
-        cp "${recovery_src}/runtime/backend.sh" "${root_dir}/usr/share/armbian-ota/backend-recovery.sh" || {
+        cp "${recovery_src}/backend.sh" "${root_dir}/usr/share/armbian-ota/backend-recovery.sh" || {
             display_alert "OTA runtime" "Failed to install backend-recovery.sh" "err"
             return 1
         }
@@ -166,4 +166,3 @@ function pre_umount_final_image__896_install_resize_userdata_service() {
 
     return 0
 }
-
